@@ -3,21 +3,22 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 // El entorno de ejecución de la aplicación proporciona la clave de API a través de `process.env.API_KEY`.
 // Se asume que esta variable está preconfigurada y disponible.
-// @ts-ignore
 const apiKey = process.env.API_KEY;
 
+export let GEMINI_API_KEY_ERROR: string | null = null;
+let ai: GoogleGenAI | null = null;
 
 // Validar que la clave de API exista
 if (!apiKey) {
-  // Arrojar un error claro si la clave no está configurada.
-  // Esto detiene la ejecución y previene errores inesperados más adelante.
-  // Asegúrate de haber configurado la variable de entorno API_KEY
-  // en tu entorno de despliegue (ej. en Netlify).
-  throw new Error("API_KEY no está definida. Por favor, configura la variable de entorno.");
+  // En lugar de arrojar un error que bloquea la app, guardamos el mensaje.
+  // La UI mostrará este error al usuario de forma amigable.
+  GEMINI_API_KEY_ERROR = "API_KEY no está definida. Por favor, configura la variable de entorno en tu plataforma de despliegue (ej. Netlify).";
+  console.error(GEMINI_API_KEY_ERROR);
+} else {
+    // Initialize the Google GenAI client only if the key exists
+    ai = new GoogleGenAI({ apiKey });
 }
 
-// Initialize the Google GenAI client
-const ai = new GoogleGenAI({ apiKey });
 /**
  * Calls the Gemini API to generate a product description.
  * @param productName The name of the product.
@@ -25,6 +26,9 @@ const ai = new GoogleGenAI({ apiKey });
  * @returns A promise that resolves to a description string.
  */
 export const generateDescriptionWithAI = async (productName: string, category: string): Promise<string> => {
+  if (!ai) {
+      return "Error: El cliente de IA no está inicializado. Revisa la configuración de la API Key.";
+  }
   console.log(`AI: Generating description for "${productName}" in category "${category}"...`);
   
   try {
@@ -45,6 +49,10 @@ export const generateDescriptionWithAI = async (productName: string, category: s
  * @returns A promise that resolves to an array of recommended product names.
  */
 export const recommendLookWithAI = async (currentProduct: Product, allProducts: Product[]): Promise<string[]> => {
+  if (!ai) {
+      console.error("AI client not initialized. Check API Key configuration.");
+      return [];
+  }
   console.log(`AI: Generating look for ${currentProduct.name}...`);
 
   try {

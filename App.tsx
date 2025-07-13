@@ -1,7 +1,9 @@
 
+
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Product, Category, Banner, StoreConfig, CartItem, Order, ToastMessage, ProductVariantDetail, ProductColorVariantDetail, ProductVariants } from './types';
-import { generateDescriptionWithAI, recommendLookWithAI } from './services/geminiService';
+import { generateDescriptionWithAI, recommendLookWithAI, GEMINI_API_KEY_ERROR } from './services/geminiService';
 import {
   CartIcon, ChevronLeftIcon, ChevronRightIcon, CloseIcon, InstagramIcon, MenuIcon,
   SearchIcon, TikTokIcon, WhatsAppIcon, SparklesIcon, TrashIcon, PlusIcon, MinusIcon,
@@ -146,6 +148,29 @@ const fileToBase64 = (file: File): Promise<string> => {
 };
 
 const App: React.FC = () => {
+    // Check for API key configuration error first
+    if (GEMINI_API_KEY_ERROR) {
+        return (
+            <div className="flex items-center justify-center h-screen bg-red-50 p-6 font-sans">
+                <div className="text-center max-w-2xl bg-white p-8 rounded-lg shadow-lg border border-red-200">
+                    <svg className="mx-auto h-12 w-12 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <h1 className="mt-4 text-2xl font-bold text-red-800">Error de Configuración</h1>
+                    <p className="mt-2 text-red-700">
+                        Tu tienda no se puede cargar porque falta una configuración importante.
+                    </p>
+                    <div className="mt-4 bg-red-100 p-4 rounded-md text-sm text-left text-red-900">
+                        <p><strong>Error:</strong> {GEMINI_API_KEY_ERROR}</p>
+                    </div>
+                    <p className="mt-4 text-sm text-gray-600">
+                        Para solucionarlo, ve a la configuración de tu sitio en Netlify, busca "Environment variables" y añade una variable con la clave (Key) <strong>API_KEY</strong> y tu clave de Google AI como valor (Value).
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     // Global State
     const [config, setConfig] = useLocalStorage<StoreConfig>('storeConfig', initialConfig);
     const [banners, setBanners] = useLocalStorage<Banner[]>('storeBanners', initialBanners);
@@ -423,6 +448,16 @@ const App: React.FC = () => {
             {isAdminOpen && <AdminPanel setOpen={setAdminOpen} editMode={editMode} setEditMode={setEditMode} store={{config, banners, products, categories, orders}} onUpdateConfig={handleUpdateConfig} onSaveBanners={handleSaveBanners} onSaveCategories={handleSaveCategories} onAddProduct={handleAddProduct} onUpdateProduct={handleUpdateProduct} onDeleteProduct={handleDeleteProduct} showToast={showToast} formatCurrency={formatCurrency} productToEdit={productToEdit} />}
             {selectedProduct && <ProductDetailModal product={selectedProduct} onClose={() => setSelectedProduct(null)} onAddToCart={handleAddToCart} formatCurrency={formatCurrency} allProducts={products} onOpenProductDetails={handleOpenProductDetails} />}
             {isInvoiceModalOpen && <InvoiceModal setOpen={setInvoiceModalOpen} cart={cart} subtotal={cartSubtotal} onSubmitOrder={(order) => { setOrders([...orders, order]); setCart([]); setInvoiceModalOpen(false); showToast("¡Pedido enviado por WhatsApp!"); }} config={config} formatCurrency={formatCurrency} />}
+
+            <a
+              href={`https://wa.me/${config.social.whatsapp}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="fixed bottom-5 right-5 z-40 bg-primary text-white p-4 rounded-full shadow-lg hover:bg-primary-dark hover:scale-110 transition-transform duration-300"
+              aria-label="Contáctanos por WhatsApp"
+            >
+              <WhatsAppIcon className="w-8 h-8" />
+            </a>
         </div>
     );
 };
@@ -487,7 +522,7 @@ const CategoryNav: React.FC<{
     return (
         <nav className="bg-surface border-b border-gray-200 sticky top-20 z-40">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div className="flex items-center space-x-2 overflow-x-auto scrollbar-hide py-3">
+                <div className="flex items-center space-x-2 overflow-x-auto scrollbar-hide py-3 md:justify-center">
                     <button
                         onClick={() => onSelectCategory('All')}
                         className={`px-4 py-1.5 rounded-full text-sm font-semibold whitespace-nowrap transition-colors duration-200 ${selectedCategory === 'All' ? 'bg-primary text-white' : 'bg-gray-200 text-on-surface hover:bg-pink-100'}`}
