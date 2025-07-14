@@ -1,26 +1,31 @@
 
 
 
+
+
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Product, Category, Banner, StoreConfig, CartItem, Order, ToastMessage, ProductVariantDetail, ProductColorVariantDetail, ProductVariants } from './types';
 import { generateDescriptionWithAI, recommendLookWithAI, GEMINI_API_KEY_ERROR } from './services/geminiService';
+import { database } from './services/firebase';
+import { ref, onValue, set } from 'firebase/database';
 import {
   CartIcon, ChevronLeftIcon, ChevronRightIcon, CloseIcon, InstagramIcon, MenuIcon,
   SearchIcon, TikTokIcon, WhatsAppIcon, SparklesIcon, TrashIcon, PlusIcon, MinusIcon,
   PencilIcon, UploadIcon
 } from './components/Icons';
 
-// --- MOCK DATA ---
+// --- MOCK DATA (Initial values for Firebase) ---
 const initialConfig: StoreConfig = {
     logoUrl: 'https://i.imgur.com/JvA19tW.png',
-    contact: { name: 'Bombon ', phone: '573114534250', schedule: 'Domingo a Domingo, 10:30am - 8:30pm' },
-    social: { instagram: 'https://instagram.com', tiktok: 'https://tiktok.com', whatsapp: '573114534250' }
+    contact: { name: 'Bombon Store', phone: '573001234567', schedule: 'Lunes a Sábado, 9am - 7pm' },
+    social: { instagram: 'https://instagram.com', tiktok: 'https://tiktok.com', whatsapp: '573001234567' }
 };
 
 const initialBanners: Banner[] = [
     { id: 1, imageUrl: 'https://i.imgur.com/8m2nJCr.jpeg', title: 'Colección Esencia', subtitle: 'Descubre tu estilo, define tu esencia.', link: '#productos' },
     { id: 2, imageUrl: 'https://i.imgur.com/jBwDqA4.jpeg', title: 'Vibra con el Color', subtitle: 'Piezas únicas para un look inolvidable.', link: '#productos' },
-    { id: 3, imageUrl: 'https://i.imgur.com/Qy2qW5G.jpeg', title: 'Envío Gratis', subtitle: 'En compras superiores a $150.000', link: '#productos' }
+    { id: 3, imageUrl: 'https://i.imgur.com/1nL3y2A.jpeg', title: 'Pantalones con Estilo', subtitle: 'Comodidad y elegancia en cada paso.', link: 'category:Pantalones' }
 ];
 
 const initialCategories: Category[] = ['Blusas', 'Vestidos', 'Pantalones', 'Accesorios', 'Chaquetas', 'Bolsos'];
@@ -102,7 +107,7 @@ const initialProducts: Product[] = [
 ];
 
 // --- Helper Functions ---
-const useLocalStorage = <T,>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>] => {
+const useBrowserStorage = <T,>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>] => {
   const [storedValue, setStoredValue] = useState<T>(() => {
     try {
       const item = window.localStorage.getItem(key);
@@ -131,12 +136,52 @@ const useLocalStorage = <T,>(key: string, initialValue: T): [T, React.Dispatch<R
         }
       }
     } catch (error) {
-      console.error(`Error in useLocalStorage setValue for key "${key}":`, error);
+      console.error(`Error in useBrowserStorage setValue for key "${key}":`, error);
     }
   };
 
   return [storedValue, setValue];
 };
+
+const useFirebaseSync = <T,>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>, boolean] => {
+    const [data, setData] = useState<T>(initialValue);
+    const [isLoading, setIsLoading] = useState(true);
+
+    const dataRef = useRef(data);
+    useEffect(() => {
+        dataRef.current = data;
+    }, [data]);
+
+    useEffect(() => {
+        const dbRef = ref(database, key);
+        const unsubscribe = onValue(dbRef, (snapshot) => {
+            if (snapshot.exists()) {
+                setData(snapshot.val());
+            } else {
+                set(dbRef, initialValue);
+                setData(initialValue);
+            }
+            setIsLoading(false);
+        }, (error) => {
+            console.error(`Firebase error on key "${key}":`, error);
+            setIsLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [key]);
+
+    const setValue: React.Dispatch<React.SetStateAction<T>> = useCallback((value) => {
+        try {
+            const valueToStore = value instanceof Function ? value(dataRef.current) : value;
+            set(ref(database, key), valueToStore);
+        } catch (error) {
+            console.error(`Firebase set error for key "${key}":`, error);
+        }
+    }, [key]);
+
+    return [data, setValue, isLoading];
+};
+
 
 const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -172,22 +217,23 @@ const App: React.FC = () => {
     }
 
     // Global State
-    const [config, setConfig] = useLocalStorage<StoreConfig>('storeConfig', initialConfig);
-    const [banners, setBanners] = useLocalStorage<Banner[]>('storeBanners', initialBanners);
-    const [products, setProducts] = useLocalStorage<Product[]>('storeProducts', initialProducts);
-    const [categories, setCategories] = useLocalStorage<Category[]>('storeCategories', initialCategories);
-    const [cart, setCart] = useLocalStorage<CartItem[]>('storeCart', []);
-    const [orders, setOrders] = useLocalStorage<Order[]>('storeOrders', []);
-    const [logoClicks, setLogoClicks] = useState(0);
-
+    const [config, setConfig, isConfigLoading] = useFirebaseSync<StoreConfig>('config', initialConfig);
+    const [banners, setBanners, areBannersLoading] = useFirebaseSync<Banner[]>('banners', initialBanners);
+    const [products, setProducts, areProductsLoading] = useFirebaseSync<Product[]>('products', initialProducts);
+    const [categories, setCategories, areCategoriesLoading] = useFirebaseSync<Category[]>('categories', initialCategories);
+    const [orders, setOrders, areOrdersLoading] = useFirebaseSync<Order[]>('orders', []);
+    const [cart, setCart] = useBrowserStorage<CartItem[]>('storeCart', []);
+    
     // UI State
     const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [isCartOpen, setCartOpen] = useState(false);
     const [isAdminOpen, setAdminOpen] = useState(false);
+    const [isPasswordPromptOpen, setPasswordPromptOpen] = useState(false);
     const [isInvoiceModalOpen, setInvoiceModalOpen] = useState(false);
     const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
     const [productToEdit, setProductToEdit] = useState<Product | null>(null);
     const [toasts, setToasts] = useState<ToastMessage[]>([]);
+    const [logoClicks, setLogoClicks] = useState(0);
     
     // Search & Filter State
     const [searchTerm, setSearchTerm] = useState('');
@@ -195,6 +241,8 @@ const App: React.FC = () => {
 
     // Admin State
     const [editMode, setEditMode] = useState(false);
+    
+    const isAppLoading = isConfigLoading || areBannersLoading || areProductsLoading || areCategoriesLoading || areOrdersLoading;
 
     // --- UTILS ---
     const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -214,16 +262,16 @@ const App: React.FC = () => {
     const cartSubtotal = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart]);
     
     const filteredProducts = useMemo(() => {
-        return products.filter(product => {
+        return (products || []).filter(product => {
             const matchesCategory = selectedCategory === 'All' || product.category === selectedCategory;
             const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase());
             return matchesCategory && matchesSearch;
         });
     }, [products, selectedCategory, searchTerm]);
 
-    const newArrivals = useMemo(() => [...products].sort((a,b) => b.id.localeCompare(a.id)).slice(0, 6), [products]);
+    const newArrivals = useMemo(() => [...(products || [])].sort((a,b) => b.id.localeCompare(a.id)).slice(0, 6), [products]);
     const bestSellers = useMemo(() => {
-        return [...products].sort(() => Math.random() - 0.5).slice(0, 4);
+        return [...(products || [])].sort(() => Math.random() - 0.5).slice(0, 4);
     }, [products]);
 
 
@@ -231,12 +279,17 @@ const App: React.FC = () => {
     const handleLogoClick = () => {
         const newClicks = logoClicks + 1;
         setLogoClicks(newClicks);
-        if (newClicks >= 5) {
-            setAdminOpen(true);
+        if (newClicks >= 3) {
+            setPasswordPromptOpen(true);
             setLogoClicks(0);
         }
         setTimeout(() => setLogoClicks(0), 1500);
     };
+
+    const handleAdminLogin = () => {
+        setPasswordPromptOpen(false);
+        setAdminOpen(true);
+    }
 
     const handleAddToCart = (product: Product, quantity: number, size?: string, color?: string) => {
         const cartItemId = `${product.id}${size ? `-${size}` : ''}${color ? `-${color}` : ''}`;
@@ -313,21 +366,35 @@ const App: React.FC = () => {
     const handleSaveCategories = (newCategories: Category[]) => { setCategories(newCategories); showToast("Categorías guardadas."); };
     
     const handleAddProduct = (newProduct: Product) => {
-      setProducts(prev => [newProduct, ...prev]);
+      setProducts(prev => [newProduct, ...(prev || [])]);
       showToast("Producto agregado exitosamente.");
     };
 
     const handleUpdateProduct = (updatedProduct: Product) => {
-      setProducts(prev => prev.map(p => p.id === updatedProduct.id ? updatedProduct : p));
+      setProducts(prev => (prev || []).map(p => p.id === updatedProduct.id ? updatedProduct : p));
       showToast("Producto actualizado exitosamente.");
     };
     
     const handleDeleteProduct = (productId: string) => {
         if (window.confirm("¿Estás seguro de que quieres eliminar este producto? Esta acción no se puede deshacer.")) {
-            setProducts(products.filter(p => p.id !== productId));
+            setProducts((products || []).filter(p => p.id !== productId));
             showToast("Producto eliminado.", "error");
         }
     };
+
+    if (isAppLoading) {
+        return (
+            <div className="flex items-center justify-center h-screen bg-background">
+                <div className="flex flex-col items-center">
+                   <svg className="animate-spin h-10 w-10 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p className="mt-4 text-on-surface">Cargando tu tienda...</p>
+                </div>
+            </div>
+        );
+    }
     
     // --- UI COMPONENTS ---
     const ToastContainer = () => (
@@ -412,7 +479,7 @@ const App: React.FC = () => {
             />
 
             <main className="pt-12">
-                <BannerCarousel banners={banners} />
+                <BannerCarousel banners={banners} onNavigateToCategory={handleNavigateToCategory} />
                 
                 <ProductCarousel title="Lo Nuevo" products={newArrivals} />
                 <ProductCarousel title="Más Vendidos" products={bestSellers} />
@@ -445,9 +512,10 @@ const App: React.FC = () => {
             <Footer contact={config.contact} social={config.social} />
 
             {isCartOpen && <CartPanel setOpen={setCartOpen} cart={cart} subtotal={cartSubtotal} onUpdateQuantity={handleUpdateCartQuantity} onRemoveItem={handleRemoveFromCart} onCheckout={() => { setCartOpen(false); setInvoiceModalOpen(true); }} formatCurrency={formatCurrency}/>}
+            {isPasswordPromptOpen && <PasswordPrompt onClose={() => setPasswordPromptOpen(false)} onSuccess={handleAdminLogin} />}
             {isAdminOpen && <AdminPanel setOpen={setAdminOpen} editMode={editMode} setEditMode={setEditMode} store={{config, banners, products, categories, orders}} onUpdateConfig={handleUpdateConfig} onSaveBanners={handleSaveBanners} onSaveCategories={handleSaveCategories} onAddProduct={handleAddProduct} onUpdateProduct={handleUpdateProduct} onDeleteProduct={handleDeleteProduct} showToast={showToast} formatCurrency={formatCurrency} productToEdit={productToEdit} />}
             {selectedProduct && <ProductDetailModal product={selectedProduct} onClose={() => setSelectedProduct(null)} onAddToCart={handleAddToCart} formatCurrency={formatCurrency} allProducts={products} onOpenProductDetails={handleOpenProductDetails} />}
-            {isInvoiceModalOpen && <InvoiceModal setOpen={setInvoiceModalOpen} cart={cart} subtotal={cartSubtotal} onSubmitOrder={(order) => { setOrders([...orders, order]); setCart([]); setInvoiceModalOpen(false); showToast("¡Pedido enviado por WhatsApp!"); }} config={config} formatCurrency={formatCurrency} />}
+            {isInvoiceModalOpen && <InvoiceModal setOpen={setInvoiceModalOpen} cart={cart} subtotal={cartSubtotal} onSubmitOrder={(order) => { setOrders([...(orders || []), order]); setCart([]); setInvoiceModalOpen(false); showToast("¡Pedido enviado por WhatsApp!"); }} config={config} formatCurrency={formatCurrency} />}
 
             <a
               href={`https://wa.me/${config.social.whatsapp}`}
@@ -463,6 +531,52 @@ const App: React.FC = () => {
 };
 
 // --- SUB-COMPONENTS ---
+const PasswordPrompt: React.FC<{
+  onClose: () => void;
+  onSuccess: () => void;
+}> = ({ onClose, onSuccess }) => {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password === '1234') { // Simple hardcoded password
+      onSuccess();
+    } else {
+      setError('Contraseña incorrecta.');
+      setPassword('');
+      inputRef.current?.focus();
+    }
+  };
+  
+  return (
+    <div className="fixed inset-0 bg-black/60 z-[90] flex items-center justify-center p-4" onClick={onClose}>
+      <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex flex-col items-center">
+            <h2 className="text-xl font-bold text-center mb-2">Acceso de Administrador</h2>
+            <p className="text-center text-sm text-gray-600 mb-4">Ingresa la contraseña para continuar.</p>
+            <div className="w-full">
+                <AdminInput
+                ref={inputRef}
+                label="Contraseña" 
+                type="password" 
+                value={password}
+                onChange={e => { setPassword(e.target.value); setError(''); }}
+                />
+            </div>
+            {error && <p className="text-red-500 text-sm mt-2 text-center w-full">{error}</p>}
+            <button type="submit" className="mt-4 w-full bg-primary text-white py-2 rounded-md hover:bg-primary-dark">Entrar</button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 const Header: React.FC<{
     logoUrl: string, cartItemCount: number, onLogoClick: () => void, onCartClick: () => void,
     isMobileMenuOpen: boolean, setMobileMenuOpen: (isOpen: boolean) => void,
@@ -502,7 +616,7 @@ const Header: React.FC<{
                         <nav className="mt-8 flex flex-col space-y-2">
                             <h3 className="font-semibold px-4 mb-2">Categorías</h3>
                             <a href="#productos" onClick={() => onSelectCategory('All')} className="block px-4 py-2 rounded-md hover:bg-gray-100">Todas</a>
-                            {categories.map(cat => (
+                            {(categories || []).map(cat => (
                                 <a key={cat} href="#productos" onClick={() => onSelectCategory(cat)} className="block px-4 py-2 rounded-md hover:bg-gray-100">{cat}</a>
                             ))}
                             <a href="#contacto" onClick={() => setMobileMenuOpen(false)} className="block px-4 py-2 rounded-md hover:bg-gray-100 mt-4">Contacto</a>
@@ -529,7 +643,7 @@ const CategoryNav: React.FC<{
                     >
                         Todas
                     </button>
-                    {categories.map(cat => (
+                    {(categories || []).map(cat => (
                         <button
                             key={cat}
                             onClick={() => onSelectCategory(cat)}
@@ -544,7 +658,7 @@ const CategoryNav: React.FC<{
     );
 };
 
-const BannerCarousel: React.FC<{ banners: Banner[] }> = ({ banners }) => {
+const BannerCarousel: React.FC<{ banners: Banner[]; onNavigateToCategory: (category: Category) => void; }> = ({ banners, onNavigateToCategory }) => {
     const [currentIndex, setCurrentIndex] = useState(0);
 
     const nextBanner = useCallback(() => {
@@ -558,10 +672,19 @@ const BannerCarousel: React.FC<{ banners: Banner[] }> = ({ banners }) => {
     };
 
     useEffect(() => {
-        if(banners.length <= 1) return;
+        if(!banners || banners.length <= 1) return;
         const timer = setInterval(nextBanner, 5000);
         return () => clearInterval(timer);
-    }, [nextBanner, banners.length]);
+    }, [nextBanner, banners]);
+
+    const handleBannerClick = (e: React.MouseEvent<HTMLAnchorElement>, banner: Banner) => {
+        if (banner.link.startsWith('category:')) {
+            e.preventDefault();
+            const category = banner.link.split(':')[1];
+            onNavigateToCategory(category as Category);
+        }
+        // If it's a normal link like '#productos', the default href behavior will work
+    };
 
     if (!banners || banners.length === 0) {
         return <div className="h-96 md:h-[500px] bg-gray-200 flex items-center justify-center text-gray-500">No hay banners para mostrar.</div>;
@@ -575,7 +698,13 @@ const BannerCarousel: React.FC<{ banners: Banner[] }> = ({ banners }) => {
                     <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center text-center text-white p-4">
                         <h2 className="text-4xl md:text-6xl font-serif">{banner.title}</h2>
                         <p className="mt-2 text-lg md:text-xl">{banner.subtitle}</p>
-                        <a href={banner.link} className="mt-6 px-8 py-3 bg-primary text-white rounded-full font-semibold hover:bg-primary-dark transition-colors duration-300 shadow-lg">Ver Colección</a>
+                        <a 
+                           href={banner.link.startsWith('category:') ? '#productos' : banner.link} 
+                           onClick={(e) => handleBannerClick(e, banner)}
+                           className="mt-6 px-8 py-3 bg-primary text-white rounded-full font-semibold hover:bg-primary-dark transition-colors duration-300 shadow-lg"
+                        >
+                            Ver Colección
+                        </a>
                     </div>
                 </div>
             ))}
@@ -672,9 +801,11 @@ const ProductDetailModal: React.FC<{
     useEffect(() => {
       const availableSizes = Object.entries(product.variants.sizes).filter(([,d]) => d.available).map(([s]) => s);
       if (product.variants.hasSizes && availableSizes.length > 0) setSelectedSize(availableSizes[0]);
+      else setSelectedSize(undefined);
 
       const availableColors = Object.entries(product.variants.colors).filter(([,d]) => d.available).map(([c]) => c);
       if (product.variants.hasColors && availableColors.length > 0) setSelectedColor(availableColors[0]);
+      else setSelectedColor(undefined);
     }, [product]);
 
     const handleGetRecommendations = async () => {
@@ -754,7 +885,7 @@ const ProductDetailModal: React.FC<{
                     </button>
                     
                      <div className="mt-6 border-t pt-4">
-                        <button onClick={handleGetRecommendations} disabled={isAiLoading} className="w-full flex items-center justify-center text-sm font-semibold text-primary disabled:opacity-50">
+                        <button onClick={handleGetRecommendations} disabled={isAiLoading || !allProducts || allProducts.length < 2} className="w-full flex items-center justify-center text-sm font-semibold text-primary disabled:opacity-50">
                             <SparklesIcon className="w-5 h-5 mr-2" />
                             {isAiLoading ? 'Buscando tu look...' : 'Completar mi Look con IA'}
                         </button>
@@ -808,7 +939,7 @@ const InvoiceModal: React.FC<{
             return;
         }
 
-        const orderId = `ORD-${new Date().toISOString().slice(5,16).replace(/[-T:]/g, '')}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
+        const orderId = `BMB-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
         
         const newOrder: Order = {
             id: orderId,
@@ -922,12 +1053,14 @@ const Footer: React.FC<{ contact: StoreConfig['contact'], social: StoreConfig['s
 
 // --- ADMIN PANEL COMPONENTS ---
 
-const AdminInput: React.FC<React.InputHTMLAttributes<HTMLInputElement> & { label: string }> = ({ label, ...props }) => (
+const AdminInput = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement> & { label: string }>(
+    ({ label, ...props }, ref) => (
     <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-        <input {...props} className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm disabled:bg-gray-100" />
+        <input ref={ref} {...props} className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm disabled:bg-gray-100" />
     </div>
-);
+));
+
 
 const ImageUpload: React.FC<{
     currentImage: string;
@@ -1019,7 +1152,7 @@ const AdminPanel: React.FC<AdminPanelProps> = (props) => {
             name: '',
             description: '',
             price: 0,
-            category: props.store.categories[0] || '',
+            category: (props.store.categories || [])[0] || '',
             imageUrl: '',
             available: true,
             variants: {
@@ -1145,7 +1278,7 @@ const AdminProductsTab: React.FC<{
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                    {products.map(p => (
+                    {(products || []).map(p => (
                         <tr key={p.id}>
                             <td className="p-3"><img src={p.imageUrl} alt={p.name} className="w-12 h-16 object-cover rounded-md" /></td>
                             <td className="p-3 text-sm font-medium text-gray-900">{p.name}</td>
@@ -1165,8 +1298,12 @@ const AdminProductsTab: React.FC<{
 );
 
 const AdminCategoriesTab: React.FC<{categories: Category[], onSave: (cats: Category[]) => void}> = ({ categories, onSave }) => {
-    const [localCategories, setLocalCategories] = useState(categories);
+    const [localCategories, setLocalCategories] = useState(categories || []);
     const [newCat, setNewCat] = useState('');
+    
+    useEffect(() => {
+        setLocalCategories(categories || []);
+    }, [categories]);
 
     const handleAdd = () => {
         if (newCat && !localCategories.includes(newCat)) {
@@ -1184,8 +1321,8 @@ const AdminCategoriesTab: React.FC<{categories: Category[], onSave: (cats: Categ
             <h1 className="text-2xl font-bold mb-6">Categorías</h1>
             <div className="bg-white rounded-lg shadow p-6 max-w-md">
                 <div className="flex space-x-2 mb-4">
-                    <input type="text" value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="Nueva categoría" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary focus:border-primary"/>
-                    <button onClick={handleAdd} className="bg-primary text-white px-4 py-2 rounded-md hover:bg-primary-dark whitespace-nowrap">Agregar</button>
+                    <AdminInput label="" type="text" value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="Nueva categoría" />
+                    <button onClick={handleAdd} className="bg-primary text-white px-4 py-2 rounded-md hover:bg-primary-dark whitespace-nowrap self-end">Agregar</button>
                 </div>
                 <div className="space-y-2">
                     {localCategories.map(cat => (
@@ -1202,7 +1339,11 @@ const AdminCategoriesTab: React.FC<{categories: Category[], onSave: (cats: Categ
 };
 
 const AdminBannersTab: React.FC<{banners: Banner[], onSave: (b: Banner[]) => void}> = ({ banners, onSave }) => {
-    const [localBanners, setLocalBanners] = useState<Banner[]>(banners);
+    const [localBanners, setLocalBanners] = useState<Banner[]>(banners || []);
+    
+    useEffect(() => {
+        setLocalBanners(banners || []);
+    }, [banners]);
 
     const updateBanner = (id: number, field: keyof Omit<Banner, 'id'>, value: string) => {
         setLocalBanners(localBanners.map(b => b.id === id ? { ...b, [field]: value } : b));
@@ -1231,7 +1372,7 @@ const AdminBannersTab: React.FC<{banners: Banner[], onSave: (b: Banner[]) => voi
                         <div className="md:col-span-2 space-y-4">
                             <AdminInput label="Título" value={banner.title} onChange={e => updateBanner(banner.id, 'title', e.target.value)} />
                             <AdminInput label="Subtítulo" value={banner.subtitle} onChange={e => updateBanner(banner.id, 'subtitle', e.target.value)} />
-                            <AdminInput label="Enlace (Link)" value={banner.link} onChange={e => updateBanner(banner.id, 'link', e.target.value)} />
+                            <AdminInput label="Enlace (Link)" value={banner.link} onChange={e => updateBanner(banner.id, 'link', e.target.value)} placeholder="Ej: #productos o category:Pantalones"/>
                         </div>
                         <button onClick={() => removeBanner(banner.id)} className="absolute top-2 right-2 text-red-500 hover:text-red-700"><TrashIcon className="w-5 h-5"/></button>
                     </div>
@@ -1243,6 +1384,11 @@ const AdminBannersTab: React.FC<{banners: Banner[], onSave: (b: Banner[]) => voi
 
 const AdminGeneralTab: React.FC<{config: StoreConfig, onSave: (c: StoreConfig) => void}> = ({ config, onSave }) => {
     const [localConfig, setLocalConfig] = useState(config);
+
+    useEffect(() => {
+        setLocalConfig(config);
+    }, [config]);
+
     const handleSave = () => onSave(localConfig);
     
     return (
@@ -1277,8 +1423,8 @@ const AdminOrdersTab: React.FC<{orders: Order[], formatCurrency: (n: number) => 
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                    {orders.length === 0 && <tr><td colSpan={5} className="p-4 text-center text-gray-500">No hay pedidos aún.</td></tr>}
-                    {orders.map(o => (
+                    {(!orders || orders.length === 0) && <tr><td colSpan={5} className="p-4 text-center text-gray-500">No hay pedidos aún.</td></tr>}
+                    {(orders || []).map(o => (
                         <tr key={o.id}>
                            <td className="p-3 text-sm font-medium text-gray-900">{o.id}</td>
                            <td className="p-3 text-sm text-gray-500">{new Date(o.date).toLocaleDateString()}</td>
@@ -1392,7 +1538,7 @@ const ProductEditor: React.FC<{
                          <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Categoría</label>
                             <select value={edited.category} onChange={e => handleChange('category', e.target.value)} className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">
-                                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                {(categories || []).map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                     </div>
