@@ -13,8 +13,8 @@ import {
 // --- MOCK DATA ---
 const initialConfig: StoreConfig = {
     logoUrl: 'https://i.imgur.com/JvA19tW.png',
-    contact: { name: 'Bombon Store', phone: '573001234567', schedule: 'Lunes a Sábado, 9am - 7pm' },
-    social: { instagram: 'https://instagram.com', tiktok: 'https://tiktok.com', whatsapp: '573001234567' }
+    contact: { name: 'Bombon ', phone: '573114534250', schedule: 'Domingo a Domingo, 10:30am - 8:30pm' },
+    social: { instagram: 'https://instagram.com', tiktok: 'https://tiktok.com', whatsapp: '573114534250' }
 };
 
 const initialBanners: Banner[] = [
