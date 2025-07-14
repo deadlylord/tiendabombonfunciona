@@ -4,6 +4,9 @@
 
 
 
+
+
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Product, Category, Banner, StoreConfig, CartItem, Order, ToastMessage, ProductVariantDetail, ProductColorVariantDetail, ProductVariants } from './types';
 import { generateDescriptionWithAI, recommendLookWithAI, GEMINI_API_KEY_ERROR } from './services/geminiService';
@@ -209,7 +212,7 @@ const App: React.FC = () => {
                         <p><strong>Error:</strong> {GEMINI_API_KEY_ERROR}</p>
                     </div>
                     <p className="mt-4 text-sm text-gray-600">
-                        Para solucionarlo, ve a la configuración de tu sitio en Netlify, busca "Environment variables" y añade una variable con la clave (Key) <strong>API_KEY</strong> y tu clave de Google AI como valor (Value).
+                        Para solucionarlo, ve a la configuración de tu sitio de despliegue (ej. Netlify), busca "Environment variables" y añade una variable con la clave (Key) <strong>API_KEY</strong> y tu clave de Google AI como valor (Value).
                     </p>
                 </div>
             </div>

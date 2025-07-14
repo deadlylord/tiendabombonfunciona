@@ -1,18 +1,18 @@
 import { Product } from '../types';
 import { GoogleGenAI, Type } from "@google/genai";
 
-// El entorno de ejecución proporciona la clave de API a través de `process.env.API_KEY`.
-// Se asume que esta variable está preconfigurada y disponible.
+// The API key MUST be obtained from the environment variable `process.env.API_KEY`.
+// This variable is assumed to be pre-configured and available in the deployment environment.
 const apiKey = process.env.API_KEY;
 
 export let GEMINI_API_KEY_ERROR: string | null = null;
 let ai: GoogleGenAI | null = null;
 
-// Validar que la clave de API exista
+// Validate that the API key exists
 if (!apiKey) {
-  // En lugar de arrojar un error que bloquea la app, guardamos el mensaje.
-  // La UI mostrará este error al usuario de forma amigable.
-  GEMINI_API_KEY_ERROR = "La variable de entorno API_KEY no está definida. Por favor, configúrala en tu plataforma de despliegue (ej. Netlify).";
+  // Instead of throwing an error that blocks the app, we save the message.
+  // The UI will display this error to the user in a friendly way.
+  GEMINI_API_KEY_ERROR = "The environment variable API_KEY is not defined. Please configure it on your deployment platform (e.g., Netlify, Vercel).";
   console.error(GEMINI_API_KEY_ERROR);
 } else {
     // Initialize the Google GenAI client only if the key exists
