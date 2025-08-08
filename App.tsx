@@ -7,14 +7,14 @@
 
 
 
+
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Product, Category, Banner, StoreConfig, CartItem, Order, ToastMessage, ProductVariantDetail, ProductColorVariantDetail, ProductVariants } from './types';
-import { generateDescriptionWithAI, recommendLookWithAI, GEMINI_API_KEY_ERROR } from './services/geminiService';
 import { database } from './services/firebase';
-import { ref, onValue, set } from 'firebase/database';
 import {
   CartIcon, ChevronLeftIcon, ChevronRightIcon, CloseIcon, InstagramIcon, MenuIcon,
-  SearchIcon, TikTokIcon, WhatsAppIcon, SparklesIcon, TrashIcon, PlusIcon, MinusIcon,
+  SearchIcon, TikTokIcon, WhatsAppIcon, TrashIcon, PlusIcon, MinusIcon,
   PencilIcon, UploadIcon
 } from './components/Icons';
 
@@ -146,7 +146,7 @@ const useBrowserStorage = <T,>(key: string, initialValue: T): [T, React.Dispatch
   return [storedValue, setValue];
 };
 
-const useFirebaseSync = <T,>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>, boolean] => {
+const useFirebaseSync = <T,>(key: string, initialValue: T): [T, (value: T) => void, boolean] => {
     const [data, setData] = useState<T>(initialValue);
     const [isLoading, setIsLoading] = useState(true);
 
@@ -156,13 +156,12 @@ const useFirebaseSync = <T,>(key: string, initialValue: T): [T, React.Dispatch<R
     }, [data]);
 
     useEffect(() => {
-        const dbRef = ref(database, key);
-        const unsubscribe = onValue(dbRef, (snapshot) => {
+        const dbRef = database.ref(key);
+        const listener = dbRef.on('value', (snapshot) => {
             if (snapshot.exists()) {
                 setData(snapshot.val());
             } else {
-                set(dbRef, initialValue);
-                setData(initialValue);
+                dbRef.set(initialValue).catch(error => console.error(`Firebase initial set error for key "${key}":`, error));
             }
             setIsLoading(false);
         }, (error) => {
@@ -170,13 +169,12 @@ const useFirebaseSync = <T,>(key: string, initialValue: T): [T, React.Dispatch<R
             setIsLoading(false);
         });
 
-        return () => unsubscribe();
-    }, [key]);
+        return () => dbRef.off('value', listener);
+    }, [key, JSON.stringify(initialValue)]);
 
-    const setValue: React.Dispatch<React.SetStateAction<T>> = useCallback((value) => {
+    const setValue = useCallback((value: T) => {
         try {
-            const valueToStore = value instanceof Function ? value(dataRef.current) : value;
-            set(ref(database, key), valueToStore);
+            database.ref(key).set(value);
         } catch (error) {
             console.error(`Firebase set error for key "${key}":`, error);
         }
@@ -196,35 +194,12 @@ const fileToBase64 = (file: File): Promise<string> => {
 };
 
 const App: React.FC = () => {
-    // Check for API key configuration error first
-    if (GEMINI_API_KEY_ERROR) {
-        return (
-            <div className="flex items-center justify-center h-screen bg-red-50 p-6 font-sans">
-                <div className="text-center max-w-2xl bg-white p-8 rounded-lg shadow-lg border border-red-200">
-                    <svg className="mx-auto h-12 w-12 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                    <h1 className="mt-4 text-2xl font-bold text-red-800">Error de Configuración</h1>
-                    <p className="mt-2 text-red-700">
-                        Tu tienda no se puede cargar porque falta una configuración importante.
-                    </p>
-                    <div className="mt-4 bg-red-100 p-4 rounded-md text-sm text-left text-red-900">
-                        <p><strong>Error:</strong> {GEMINI_API_KEY_ERROR}</p>
-                    </div>
-                    <p className="mt-4 text-sm text-gray-600">
-                        Para solucionarlo, ve a la configuración de tu sitio de despliegue (ej. Netlify), busca "Environment variables" y añade una variable con la clave (Key) <strong>API_KEY</strong> y tu clave de Google AI como valor (Value).
-                    </p>
-                </div>
-            </div>
-        );
-    }
-
     // Global State
     const [config, setConfig, isConfigLoading] = useFirebaseSync<StoreConfig>('config', initialConfig);
     const [banners, setBanners, areBannersLoading] = useFirebaseSync<Banner[]>('banners', initialBanners);
     const [products, setProducts, areProductsLoading] = useFirebaseSync<Product[]>('products', initialProducts);
     const [categories, setCategories, areCategoriesLoading] = useFirebaseSync<Category[]>('categories', initialCategories);
-    const [orders, setOrders, areOrdersLoading] = useFirebaseSync<Order[]>('orders', []);
+    const [orders, , areOrdersLoading] = useFirebaseSync<Order[]>('orders', []); // Orders are now write-only from client, so we don't need a setter here.
     const [cart, setCart] = useBrowserStorage<CartItem[]>('storeCart', []);
     
     // UI State
@@ -307,7 +282,7 @@ const App: React.FC = () => {
                 name: product.name,
                 price: product.price,
                 quantity,
-                imageUrl: (color && product.variants.colors[color]?.imageUrl) || product.imageUrl,
+                imageUrl: (color && product.variants?.colors?.[color]?.imageUrl) || product.imageUrl,
                 size,
                 color,
             };
@@ -318,8 +293,7 @@ const App: React.FC = () => {
     };
     
     const handleQuickAddToCart = (product: Product) => {
-      const { variants } = product;
-      if (variants.hasSizes || variants.hasColors) {
+      if (product.variants?.hasSizes || product.variants?.hasColors) {
         setSelectedProduct(product);
       } else {
         handleAddToCart(product, 1);
@@ -369,20 +343,38 @@ const App: React.FC = () => {
     const handleSaveCategories = (newCategories: Category[]) => { setCategories(newCategories); showToast("Categorías guardadas."); };
     
     const handleAddProduct = (newProduct: Product) => {
-      setProducts(prev => [newProduct, ...(prev || [])]);
+      const updatedProducts = [newProduct, ...(products || [])];
+      setProducts(updatedProducts);
       showToast("Producto agregado exitosamente.");
     };
 
     const handleUpdateProduct = (updatedProduct: Product) => {
-      setProducts(prev => (prev || []).map(p => p.id === updatedProduct.id ? updatedProduct : p));
+      const updatedProducts = (products || []).map(p => p.id === updatedProduct.id ? updatedProduct : p);
+      setProducts(updatedProducts);
       showToast("Producto actualizado exitosamente.");
     };
     
     const handleDeleteProduct = (productId: string) => {
         if (window.confirm("¿Estás seguro de que quieres eliminar este producto? Esta acción no se puede deshacer.")) {
-            setProducts((products || []).filter(p => p.id !== productId));
+            const updatedProducts = (products || []).filter(p => p.id !== productId);
+            setProducts(updatedProducts);
             showToast("Producto eliminado.", "error");
         }
+    };
+    
+     const handleNewOrder = (newOrder: Omit<Order, 'id'>) => {
+        const newOrderRef = database.ref('orders').push();
+        const fullOrder = { ...newOrder, id: newOrderRef.key! };
+        newOrderRef.set(fullOrder)
+            .then(() => {
+                setCart([]);
+                setInvoiceModalOpen(false);
+                showToast("¡Pedido enviado por WhatsApp!");
+            })
+            .catch(error => {
+                console.error("Error saving order to Firebase:", error);
+                showToast("Error al guardar el pedido.", "error");
+            });
     };
 
     if (isAppLoading) {
@@ -516,9 +508,9 @@ const App: React.FC = () => {
 
             {isCartOpen && <CartPanel setOpen={setCartOpen} cart={cart} subtotal={cartSubtotal} onUpdateQuantity={handleUpdateCartQuantity} onRemoveItem={handleRemoveFromCart} onCheckout={() => { setCartOpen(false); setInvoiceModalOpen(true); }} formatCurrency={formatCurrency}/>}
             {isPasswordPromptOpen && <PasswordPrompt onClose={() => setPasswordPromptOpen(false)} onSuccess={handleAdminLogin} />}
-            {isAdminOpen && <AdminPanel setOpen={setAdminOpen} editMode={editMode} setEditMode={setEditMode} store={{config, banners, products, categories, orders}} onUpdateConfig={handleUpdateConfig} onSaveBanners={handleSaveBanners} onSaveCategories={handleSaveCategories} onAddProduct={handleAddProduct} onUpdateProduct={handleUpdateProduct} onDeleteProduct={handleDeleteProduct} showToast={showToast} formatCurrency={formatCurrency} productToEdit={productToEdit} />}
-            {selectedProduct && <ProductDetailModal product={selectedProduct} onClose={() => setSelectedProduct(null)} onAddToCart={handleAddToCart} formatCurrency={formatCurrency} allProducts={products} onOpenProductDetails={handleOpenProductDetails} />}
-            {isInvoiceModalOpen && <InvoiceModal setOpen={setInvoiceModalOpen} cart={cart} subtotal={cartSubtotal} onSubmitOrder={(order) => { setOrders([...(orders || []), order]); setCart([]); setInvoiceModalOpen(false); showToast("¡Pedido enviado por WhatsApp!"); }} config={config} formatCurrency={formatCurrency} />}
+            {isAdminOpen && <AdminPanel setOpen={setAdminOpen} editMode={editMode} setEditMode={setEditMode} store={{config, banners, products, categories, orders}} onUpdateConfig={handleUpdateConfig} onSaveBanners={handleSaveBanners} onSaveCategories={handleSaveCategories} onAddProduct={handleAddProduct} onUpdateProduct={handleUpdateProduct} onDeleteProduct={handleDeleteProduct} formatCurrency={formatCurrency} productToEdit={productToEdit} />}
+            {selectedProduct && <ProductDetailModal product={selectedProduct} onClose={() => setSelectedProduct(null)} onAddToCart={handleAddToCart} formatCurrency={formatCurrency} />}
+            {isInvoiceModalOpen && <InvoiceModal setOpen={setInvoiceModalOpen} cart={cart} subtotal={cartSubtotal} onSubmitOrder={handleNewOrder} config={config} formatCurrency={formatCurrency} />}
 
             <a
               href={`https://wa.me/${config.social.whatsapp}`}
@@ -792,49 +784,29 @@ const CartPanel: React.FC<{
 const ProductDetailModal: React.FC<{
     product: Product, onClose: () => void,
     onAddToCart: (product: Product, quantity: number, size?: string, color?: string) => void,
-    formatCurrency: (amount: number) => string, allProducts: Product[],
-    onOpenProductDetails: (product: Product) => void
-}> = ({ product, onClose, onAddToCart, formatCurrency, allProducts, onOpenProductDetails }) => {
+    formatCurrency: (amount: number) => string,
+}> = ({ product, onClose, onAddToCart, formatCurrency }) => {
     const [quantity, setQuantity] = useState(1);
     const [selectedSize, setSelectedSize] = useState<string | undefined>(undefined);
     const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined);
-    const [isAiLoading, setIsAiLoading] = useState(false);
-    const [aiRecommendations, setAiRecommendations] = useState<Product[]>([]);
 
     useEffect(() => {
-      const availableSizes = Object.entries(product.variants.sizes).filter(([,d]) => d.available).map(([s]) => s);
-      if (product.variants.hasSizes && availableSizes.length > 0) setSelectedSize(availableSizes[0]);
+      const sizes = product.variants?.sizes || {};
+      const availableSizes = Object.entries(sizes).filter(([,d]) => d.available).map(([s]) => s);
+      if (product.variants?.hasSizes && availableSizes.length > 0) setSelectedSize(availableSizes[0]);
       else setSelectedSize(undefined);
 
-      const availableColors = Object.entries(product.variants.colors).filter(([,d]) => d.available).map(([c]) => c);
-      if (product.variants.hasColors && availableColors.length > 0) setSelectedColor(availableColors[0]);
+      const colors = product.variants?.colors || {};
+      const availableColors = Object.entries(colors).filter(([,d]) => d.available).map(([c]) => c);
+      if (product.variants?.hasColors && availableColors.length > 0) setSelectedColor(availableColors[0]);
       else setSelectedColor(undefined);
     }, [product]);
 
-    const handleGetRecommendations = async () => {
-        setIsAiLoading(true);
-        setAiRecommendations([]);
-        try {
-            const recommendedNames = await recommendLookWithAI(product, allProducts);
-            const recommendedProducts = allProducts.filter(p => recommendedNames.includes(p.name) && p.id !== product.id);
-            setAiRecommendations(recommendedProducts);
-        } catch (error) {
-            console.error("AI recommendation error:", error);
-        } finally {
-            setIsAiLoading(false);
-        }
-    };
-    
-    const displayImage = selectedColor && product.variants.colors[selectedColor]?.imageUrl
+    const displayImage = selectedColor && product.variants?.colors?.[selectedColor]?.imageUrl
         ? product.variants.colors[selectedColor]!.imageUrl
         : product.imageUrl;
 
-    const isAddToCartDisabled = !product.available || (product.variants.hasSizes && !selectedSize) || (product.variants.hasColors && !selectedColor);
-
-    const handleRecommendationClick = (p: Product) => {
-        onClose();
-        setTimeout(() => onOpenProductDetails(p), 50); 
-    };
+    const isAddToCartDisabled = !product.available || (product.variants?.hasSizes && !selectedSize) || (product.variants?.hasColors && !selectedColor);
 
     return (
         <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4" onClick={onClose}>
@@ -848,11 +820,11 @@ const ProductDetailModal: React.FC<{
                     <p className="text-2xl text-primary font-bold my-2">{formatCurrency(product.price)}</p>
                     <p className="text-gray-600 text-sm mb-4">{product.description}</p>
                     
-                    {product.variants.hasSizes && (
+                    {product.variants?.hasSizes && (
                         <div className="mb-4">
                             <h4 className="font-semibold mb-2 text-sm">Talla: <span className="font-normal text-gray-500">{selectedSize}</span></h4>
                             <div className="flex flex-wrap gap-2">
-                                {Object.entries(product.variants.sizes).map(([size, details]) => (
+                                {Object.entries(product.variants?.sizes || {}).map(([size, details]) => (
                                     <button key={size} onClick={() => setSelectedSize(size)} disabled={!details.available}
                                         className={`px-4 py-2 border rounded-md text-sm transition-colors ${selectedSize === size ? 'bg-primary text-white border-primary' : 'bg-white'} ${!details.available ? 'text-gray-400 bg-gray-100 line-through cursor-not-allowed' : 'hover:border-primary'}`}
                                     >{size}</button>
@@ -861,11 +833,11 @@ const ProductDetailModal: React.FC<{
                         </div>
                     )}
 
-                    {product.variants.hasColors && (
+                    {product.variants?.hasColors && (
                          <div className="mb-4">
                             <h4 className="font-semibold mb-2 text-sm">Color: <span className="font-normal text-gray-500">{selectedColor}</span></h4>
                             <div className="flex flex-wrap gap-2">
-                                {Object.entries(product.variants.colors).map(([color, details]) => (
+                                {Object.entries(product.variants?.colors || {}).map(([color, details]) => (
                                     <button key={color} onClick={() => setSelectedColor(color)} disabled={!details.available}
                                         className={`px-4 py-2 border rounded-md text-sm transition-colors ${selectedColor === color ? 'bg-primary text-white border-primary' : 'bg-white'} ${!details.available ? 'text-gray-400 bg-gray-100 line-through cursor-not-allowed' : 'hover:border-primary'}`}
                                     >{color}</button>
@@ -886,28 +858,6 @@ const ProductDetailModal: React.FC<{
                     <button onClick={() => onAddToCart(product, quantity, selectedSize, selectedColor)} disabled={isAddToCartDisabled} className="w-full bg-primary text-white py-3 rounded-md hover:bg-primary-dark transition-colors mt-auto disabled:bg-gray-400 disabled:cursor-not-allowed">
                         {product.available ? 'Agregar al Carrito' : 'Agotado'}
                     </button>
-                    
-                     <div className="mt-6 border-t pt-4">
-                        <button onClick={handleGetRecommendations} disabled={isAiLoading || !allProducts || allProducts.length < 2} className="w-full flex items-center justify-center text-sm font-semibold text-primary disabled:opacity-50">
-                            <SparklesIcon className="w-5 h-5 mr-2" />
-                            {isAiLoading ? 'Buscando tu look...' : 'Completar mi Look con IA'}
-                        </button>
-                        {isAiLoading && <div className="text-center text-sm mt-2 text-gray-500">Creando la combinación perfecta...</div>}
-                        {aiRecommendations.length > 0 && (
-                            <div className="mt-4">
-                                <h5 className="font-semibold text-center text-sm mb-2">Te recomendamos:</h5>
-                                <div className="grid grid-cols-2 gap-4">
-                                    {aiRecommendations.map(p => (
-                                        <div key={p.id} className="text-center border rounded-lg p-2 cursor-pointer hover:shadow-md" onClick={() => handleRecommendationClick(p)}>
-                                            <img src={p.imageUrl} alt={p.name} className="w-full h-32 object-cover rounded-md"/>
-                                            <p className="text-xs mt-1 truncate font-medium">{p.name}</p>
-                                            <p className="text-xs mt-1 font-bold text-primary">{formatCurrency(p.price)}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
                 </div>
             </div>
         </div>
@@ -916,7 +866,7 @@ const ProductDetailModal: React.FC<{
 
 const InvoiceModal: React.FC<{
     setOpen: (isOpen: boolean) => void, cart: CartItem[], subtotal: number,
-    onSubmitOrder: (order: Order) => void, config: StoreConfig,
+    onSubmitOrder: (order: Omit<Order, 'id'>) => void, config: StoreConfig,
     formatCurrency: (amount: number) => string
 }> = ({ setOpen, cart, subtotal, onSubmitOrder, config, formatCurrency }) => {
     const [customerName, setCustomerName] = useState('');
@@ -942,10 +892,9 @@ const InvoiceModal: React.FC<{
             return;
         }
 
-        const orderId = `BMB-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+        const tempOrderId = `BMB-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
         
-        const newOrder: Order = {
-            id: orderId,
+        const newOrderData: Omit<Order, 'id'> = {
             date: new Date().toISOString(),
             customerName,
             customerPhone,
@@ -954,17 +903,17 @@ const InvoiceModal: React.FC<{
             shippingCost,
             total,
             deliveryMethod,
-            address: deliveryMethod === 'Envío a Domicilio' ? address : undefined,
+            ...(deliveryMethod === 'Envío a Domicilio' && { address }),
             paymentMethod,
         };
         
         const messageItems = cart.map(item => `- ${item.quantity}x ${item.name} ${item.size ? `(Talla: ${item.size})` : ''} ${item.color ? `(Color: ${item.color})` : ''} - ${formatCurrency(item.price * item.quantity)}`).join('\n');
         
-        const message = `¡Hola ${config.contact.name}! 👋 Quiero hacer un pedido:\n\n*Número de Orden:* ${orderId}\n\n*Productos:*\n${messageItems}\n\n*Subtotal:* ${formatCurrency(subtotal)}\n*Envío:* ${formatCurrency(shippingCost)}\n*TOTAL:* ${formatCurrency(total)}\n\n*Datos del Cliente:*\n- Nombre: ${customerName}\n- Teléfono: ${customerPhone}\n\n*Entrega:* ${deliveryMethod}\n${deliveryMethod === 'Envío a Domicilio' ? `- Dirección: ${address}\n` : ''}*Medio de Pago:* ${paymentMethod}\n\n¡Gracias! 😊`;
+        const message = `¡Hola ${config.contact.name}! 👋 Quiero hacer un pedido:\n\n*Número de Orden:* ${tempOrderId}\n\n*Productos:*\n${messageItems}\n\n*Subtotal:* ${formatCurrency(subtotal)}\n*Envío:* ${formatCurrency(shippingCost)}\n*TOTAL:* ${formatCurrency(total)}\n\n*Datos del Cliente:*\n- Nombre: ${customerName}\n- Teléfono: ${customerPhone}\n\n*Entrega:* ${deliveryMethod}\n${deliveryMethod === 'Envío a Domicilio' ? `- Dirección: ${address}\n` : ''}*Medio de Pago:* ${paymentMethod}\n\n¡Gracias! 😊`;
         
         window.open(`https://wa.me/${config.social.whatsapp}?text=${encodeURIComponent(message)}`, '_blank');
         
-        onSubmitOrder(newOrder);
+        onSubmitOrder(newOrderData);
     };
 
     return (
@@ -1116,7 +1065,6 @@ interface AdminPanelProps {
     onAddProduct: (product: Product) => void;
     onUpdateProduct: (product: Product) => void;
     onDeleteProduct: (productId: string) => void;
-    showToast: (message: string, type?: 'success' | 'error') => void;
     formatCurrency: (amount: number) => string;
     productToEdit: Product | null;
 }
@@ -1126,7 +1074,7 @@ const AdminPanel: React.FC<AdminPanelProps> = (props) => {
         setOpen, editMode, setEditMode, store,
         onUpdateConfig, onSaveBanners, onSaveCategories,
         onAddProduct, onUpdateProduct, onDeleteProduct,
-        showToast, formatCurrency, productToEdit
+        formatCurrency, productToEdit
     } = props;
     
     const [activeTab, setActiveTab] = useState('Productos');
@@ -1191,7 +1139,6 @@ const AdminPanel: React.FC<AdminPanelProps> = (props) => {
                 onCancel={handleCloseEditor}
                 onDelete={onDeleteProduct}
                 isNewProduct={isAddingProduct}
-                showToast={showToast}
             />;
         }
 
@@ -1427,7 +1374,7 @@ const AdminOrdersTab: React.FC<{orders: Order[], formatCurrency: (n: number) => 
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                     {(!orders || orders.length === 0) && <tr><td colSpan={5} className="p-4 text-center text-gray-500">No hay pedidos aún.</td></tr>}
-                    {(orders || []).map(o => (
+                    {(Object.values(orders || {}) as Order[]).map(o => (
                         <tr key={o.id}>
                            <td className="p-3 text-sm font-medium text-gray-900">{o.id}</td>
                            <td className="p-3 text-sm text-gray-500">{new Date(o.date).toLocaleDateString()}</td>
@@ -1445,30 +1392,11 @@ const AdminOrdersTab: React.FC<{orders: Order[], formatCurrency: (n: number) => 
 const ProductEditor: React.FC<{
     product: Product; categories: Category[]; onSave: (p: Product) => void;
     onCancel: () => void; onDelete: (id: string) => void; isNewProduct: boolean;
-    showToast: (msg: string, type?: 'success'|'error') => void;
-}> = ({ product, categories, onSave, onCancel, onDelete, isNewProduct, showToast }) => {
+}> = ({ product, categories, onSave, onCancel, onDelete, isNewProduct }) => {
     const [edited, setEdited] = useState(product);
     const [newSize, setNewSize] = useState('');
     const [newColor, setNewColor] = useState('');
-    const [isAiLoading, setIsAiLoading] = useState(false);
 
-    const handleGenerateDescription = async () => {
-        if (!edited.name || !edited.category) {
-            showToast("Por favor, ingresa un nombre y categoría para el producto.", "error");
-            return;
-        }
-        setIsAiLoading(true);
-        try {
-            const desc = await generateDescriptionWithAI(edited.name, edited.category);
-            setEdited(p => ({...p, description: desc}));
-            showToast("Descripción generada con IA.");
-        } catch (error) {
-            showToast("Error al generar descripción.", "error");
-        } finally {
-            setIsAiLoading(false);
-        }
-    };
-    
     const handleChange = (field: keyof Product, value: any) => {
         setEdited(p => ({ ...p, [field]: value }));
     };
@@ -1509,8 +1437,10 @@ const ProductEditor: React.FC<{
     };
 
     const handleColorUpdate = (color: string, field: keyof ProductColorVariantDetail, value: any) => {
-        const updatedColor = { ...edited.variants.colors[color], [field]: value };
-        const newColors = { ...edited.variants.colors, [color]: updatedColor };
+        const currentColors = edited.variants.colors;
+        const currentColorData = currentColors[color] || { available: false, imageUrl: '' };
+        const updatedColor = { ...currentColorData, [field]: value };
+        const newColors = { ...currentColors, [color]: updatedColor };
         handleVariantChange('colors', newColors);
     };
 
@@ -1531,10 +1461,6 @@ const ProductEditor: React.FC<{
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
                         <textarea value={edited.description} onChange={e => handleChange('description', e.target.value)} rows={4} className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"/>
-                        <button onClick={handleGenerateDescription} disabled={isAiLoading} className="mt-2 text-sm text-primary flex items-center space-x-1 disabled:opacity-50">
-                            <SparklesIcon className="w-4 h-4"/>
-                            <span>{isAiLoading ? "Generando..." : "Generar con IA"}</span>
-                        </button>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                         <AdminInput label="Precio (COP)" type="number" value={edited.price} onChange={e => handleChange('price', parseFloat(e.target.value) || 0)} />
