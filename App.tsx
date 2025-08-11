@@ -1,14 +1,5 @@
 
 
-
-
-
-
-
-
-
-
-
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Product, Category, Banner, StoreConfig, CartItem, Order, ToastMessage, ProductVariantDetail, ProductColorVariantDetail, ProductVariants } from './types';
 import { database } from './services/firebase';
@@ -199,7 +190,7 @@ const App: React.FC = () => {
     const [banners, setBanners, areBannersLoading] = useFirebaseSync<Banner[]>('banners', initialBanners);
     const [products, setProducts, areProductsLoading] = useFirebaseSync<Product[]>('products', initialProducts);
     const [categories, setCategories, areCategoriesLoading] = useFirebaseSync<Category[]>('categories', initialCategories);
-    const [orders, , areOrdersLoading] = useFirebaseSync<Order[]>('orders', []); // Orders are now write-only from client, so we don't need a setter here.
+    const [orders, setOrders, areOrdersLoading] = useFirebaseSync<Order[]>('orders', []); 
     const [cart, setCart] = useBrowserStorage<CartItem[]>('storeCart', []);
     
     // UI State
@@ -293,9 +284,16 @@ const App: React.FC = () => {
     };
     
     const handleQuickAddToCart = (product: Product) => {
-      if (product.variants?.hasSizes || product.variants?.hasColors) {
+      // A product has defined variants only if the flag is true AND there are actual options.
+      const hasDefinedSizes = !!(product.variants?.hasSizes && product.variants.sizes && Object.keys(product.variants.sizes).length > 0);
+      const hasDefinedColors = !!(product.variants?.hasColors && product.variants.colors && Object.keys(product.variants.colors).length > 0);
+
+      if (hasDefinedSizes || hasDefinedColors) {
+        // Open the modal only if there are variants to choose from.
         setSelectedProduct(product);
       } else {
+        // Otherwise (no variants or incomplete setup), add directly.
+        // This handles new products gracefully.
         handleAddToCart(product, 1);
       }
     };
@@ -363,10 +361,17 @@ const App: React.FC = () => {
     };
     
      const handleNewOrder = (newOrder: Omit<Order, 'id'>) => {
-        const newOrderRef = database.ref('orders').push();
-        const fullOrder = { ...newOrder, id: newOrderRef.key! };
-        newOrderRef.set(fullOrder)
-            .then(() => {
+        const dbOrdersRef = database.ref('orders');
+        const ordersArray = Array.isArray(orders) ? orders : Object.values(orders || {});
+        const newOrders = [...ordersArray, { ...newOrder, id: `order-${Date.now()}` }]; // Create a temporary unique ID
+        
+        dbOrdersRef.push({ ...newOrder, date: new Date().toISOString() })
+            .then((newOrderRef) => {
+                 // Optionally update the local state with the real key from Firebase
+                const fullOrder = { ...newOrder, id: newOrderRef.key! };
+                const updatedOrders = [...(Array.isArray(orders) ? orders : Object.values(orders || {})), fullOrder];
+                setOrders(updatedOrders as any);
+            
                 setCart([]);
                 setInvoiceModalOpen(false);
                 showToast("¡Pedido enviado por WhatsApp!");
@@ -385,7 +390,7 @@ const App: React.FC = () => {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <p className="mt-4 text-on-surface">Cargando tu tienda...</p>
+                    <p className="mt-4 text-on-surface">Descubre tu próximo outfit</p>
                 </div>
             </div>
         );
@@ -688,7 +693,7 @@ const BannerCarousel: React.FC<{ banners: Banner[]; onNavigateToCategory: (categ
     return (
         <div className="relative w-full h-96 md:h-[500px] overflow-hidden bg-gray-100">
             {banners.map((banner, index) => (
-                <div key={banner.id} className={`absolute inset-0 transition-opacity duration-1000 ${index === currentIndex ? 'opacity-100' : 'opacity-0'}`}>
+                <div key={banner.id} className={`absolute inset-0 transition-opacity duration-1000 ${index === currentIndex ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
                     <img src={banner.imageUrl} alt={banner.title} className="w-full h-full object-cover" />
                     <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center text-center text-white p-4">
                         <h2 className="text-4xl md:text-6xl font-serif">{banner.title}</h2>
@@ -893,12 +898,21 @@ const InvoiceModal: React.FC<{
         }
 
         const tempOrderId = `BMB-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+
+        // Sanitize cart items for Firebase by removing undefined properties
+        const sanitizedCartItems = cart.map(item => {
+            const { size, color, ...rest } = item;
+            const sanitizedItem: any = { ...rest };
+            if (size) sanitizedItem.size = size;
+            if (color) sanitizedItem.color = color;
+            return sanitizedItem as CartItem;
+        });
         
         const newOrderData: Omit<Order, 'id'> = {
             date: new Date().toISOString(),
             customerName,
             customerPhone,
-            items: cart,
+            items: sanitizedCartItems,
             subtotal,
             shippingCost,
             total,
@@ -1374,9 +1388,9 @@ const AdminOrdersTab: React.FC<{orders: Order[], formatCurrency: (n: number) => 
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                     {(!orders || orders.length === 0) && <tr><td colSpan={5} className="p-4 text-center text-gray-500">No hay pedidos aún.</td></tr>}
-                    {(Object.values(orders || {}) as Order[]).map(o => (
+                    {(Object.values(orders || {}) as Order[]).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(o => (
                         <tr key={o.id}>
-                           <td className="p-3 text-sm font-medium text-gray-900">{o.id}</td>
+                           <td className="p-3 text-sm font-medium text-gray-900 truncate" style={{maxWidth: '100px'}}>{o.id}</td>
                            <td className="p-3 text-sm text-gray-500">{new Date(o.date).toLocaleDateString()}</td>
                            <td className="p-3 text-sm text-gray-500">{o.customerName}</td>
                            <td className="p-3 text-sm text-gray-500">{formatCurrency(o.total)}</td>
@@ -1402,42 +1416,48 @@ const ProductEditor: React.FC<{
     };
 
     const handleVariantChange = (field: keyof ProductVariants, value: any) => {
-        setEdited(p => ({ ...p, variants: { ...p.variants, [field]: value } }));
+        setEdited(p => ({
+            ...p,
+            variants: {
+                ...(p.variants || { hasSizes: false, sizes: {}, hasColors: false, colors: {} }),
+                [field]: value
+            }
+        }));
     };
 
     const handleSizeAdd = () => {
-        if (newSize && !edited.variants.sizes[newSize]) {
-            const newSizes = { ...edited.variants.sizes, [newSize]: { available: true } };
+        if (newSize && !(edited.variants?.sizes || {})[newSize]) {
+            const newSizes = { ...(edited.variants?.sizes || {}), [newSize]: { available: true } };
             handleVariantChange('sizes', newSizes);
             setNewSize('');
         }
     };
 
     const handleSizeRemove = (size: string) => {
-        const { [size]: _, ...remaining } = edited.variants.sizes;
+        const { [size]: _, ...remaining } = edited.variants?.sizes || {};
         handleVariantChange('sizes', remaining);
     };
 
     const handleSizeAvailability = (size: string, available: boolean) => {
-        const newSizes = { ...edited.variants.sizes, [size]: { available } };
+        const newSizes = { ...(edited.variants?.sizes || {}), [size]: { available } };
         handleVariantChange('sizes', newSizes);
     };
 
     const handleColorAdd = () => {
-        if (newColor && !edited.variants.colors[newColor]) {
-            const newColors = { ...edited.variants.colors, [newColor]: { available: true, imageUrl: '' } };
+        if (newColor && !(edited.variants?.colors || {})[newColor]) {
+            const newColors = { ...(edited.variants?.colors || {}), [newColor]: { available: true, imageUrl: '' } };
             handleVariantChange('colors', newColors);
             setNewColor('');
         }
     };
     
     const handleColorRemove = (color: string) => {
-        const { [color]: _, ...remaining } = edited.variants.colors;
+        const { [color]: _, ...remaining } = edited.variants?.colors || {};
         handleVariantChange('colors', remaining);
     };
 
     const handleColorUpdate = (color: string, field: keyof ProductColorVariantDetail, value: any) => {
-        const currentColors = edited.variants.colors;
+        const currentColors = edited.variants?.colors || {};
         const currentColorData = currentColors[color] || { available: false, imageUrl: '' };
         const updatedColor = { ...currentColorData, [field]: value };
         const newColors = { ...currentColors, [color]: updatedColor };
@@ -1485,16 +1505,16 @@ const ProductEditor: React.FC<{
                     {/* Tallas */}
                     <div className="border-t pt-4">
                         <div className="flex items-center space-x-2 mb-2">
-                           <input type="checkbox" id="hasSizes" checked={edited.variants.hasSizes} onChange={e => handleVariantChange('hasSizes', e.target.checked)} className="h-4 w-4 text-primary rounded border-gray-300 focus:ring-primary" />
+                           <input type="checkbox" id="hasSizes" checked={edited.variants?.hasSizes || false} onChange={e => handleVariantChange('hasSizes', e.target.checked)} className="h-4 w-4 text-primary rounded border-gray-300 focus:ring-primary" />
                            <label htmlFor="hasSizes" className="text-sm font-medium text-gray-700">Tiene tallas</label>
                         </div>
-                        {edited.variants.hasSizes && (
+                        {edited.variants?.hasSizes && (
                             <div className="pl-6 space-y-2">
                                 <div className="flex space-x-2">
                                     <input type="text" value={newSize} onChange={e => setNewSize(e.target.value)} placeholder="Ej: S, M, 36" className="w-full text-sm px-2 py-1 border border-gray-300 rounded-md"/>
                                     <button onClick={handleSizeAdd} className="bg-gray-200 px-3 py-1 text-sm rounded-md">+</button>
                                 </div>
-                                {Object.entries(edited.variants.sizes).map(([size, detail]) => (
+                                {Object.entries(edited.variants?.sizes || {}).map(([size, detail]) => (
                                     <div key={size} className="flex justify-between items-center text-sm">
                                         <span>{size}</span>
                                         <div className="flex items-center space-x-2">
@@ -1510,16 +1530,16 @@ const ProductEditor: React.FC<{
                     {/* Colores */}
                     <div className="border-t pt-4">
                         <div className="flex items-center space-x-2 mb-2">
-                           <input type="checkbox" id="hasColors" checked={edited.variants.hasColors} onChange={e => handleVariantChange('hasColors', e.target.checked)} className="h-4 w-4 text-primary rounded border-gray-300 focus:ring-primary"/>
+                           <input type="checkbox" id="hasColors" checked={edited.variants?.hasColors || false} onChange={e => handleVariantChange('hasColors', e.target.checked)} className="h-4 w-4 text-primary rounded border-gray-300 focus:ring-primary"/>
                            <label htmlFor="hasColors" className="text-sm font-medium text-gray-700">Tiene colores</label>
                         </div>
-                        {edited.variants.hasColors && (
+                        {edited.variants?.hasColors && (
                              <div className="pl-6 space-y-4">
                                 <div className="flex space-x-2">
                                     <input type="text" value={newColor} onChange={e => setNewColor(e.target.value)} placeholder="Ej: Rojo, Azul" className="w-full text-sm px-2 py-1 border border-gray-300 rounded-md"/>
                                     <button onClick={handleColorAdd} className="bg-gray-200 px-3 py-1 text-sm rounded-md">+</button>
                                 </div>
-                                {Object.entries(edited.variants.colors).map(([color, detail]) => (
+                                {Object.entries(edited.variants?.colors || {}).map(([color, detail]) => (
                                     <div key={color} className="space-y-2 p-2 border rounded-md">
                                         <div className="flex justify-between items-center text-sm font-medium">
                                           <span>{color}</span>
